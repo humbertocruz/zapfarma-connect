@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	_ "github.com/joho/godotenv/autoload"
 )
 
@@ -56,10 +57,11 @@ func startApp() {
 }
 
 func loginAndConfigure() {
-	log.Printf("Opening login page: %s/connect", getBaseURL())
-	openBrowser(getBaseURL() + "/connect")
+	deviceId := uuid.New().String()
+	log.Printf("Opening login page: %s/connect?deviceId=%s", getBaseURL(), deviceId)
+	openBrowser(getBaseURL() + "/connect?deviceId=" + deviceId)
 
-	token = waitForToken()
+	token = waitForToken(deviceId)
 	if token == "" {
 		log.Println("No token received, exiting")
 		os.Exit(1)
@@ -71,11 +73,11 @@ func loginAndConfigure() {
 	waitForConfig()
 }
 
-func waitForToken() string {
+func waitForToken(deviceId string) string {
 	for i := 0; i < 300; i++ {
 		time.Sleep(1 * time.Second)
 
-		token, err := fetchToken()
+		token, err := fetchPendingToken(deviceId)
 		if err == nil && token != "" {
 			log.Println("Token received!")
 			saveToken(token)
@@ -89,31 +91,28 @@ func waitForToken() string {
 	return ""
 }
 
-func fetchToken() (string, error) {
-	if cfg.Token == "" {
-		return "", fmt.Errorf("no token")
-	}
-
-	resp, err := http.Get(getBaseURL() + "/api/auth/verify?token=" + cfg.Token)
+func fetchPendingToken(deviceId string) (string, error) {
+	resp, err := http.Get(getBaseURL() + "/api/connector/pending-token?deviceId=" + deviceId)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("invalid token")
+		return "", fmt.Errorf("request failed")
 	}
 
 	var result struct {
-		Valid bool `json:"valid"`
+		HasToken bool   `json:"hasToken"`
+		Token    string `json:"token,omitempty"`
 	}
 	json.NewDecoder(resp.Body).Decode(&result)
 
-	if result.Valid {
-		return cfg.Token, nil
+	if result.HasToken && result.Token != "" {
+		return result.Token, nil
 	}
 
-	return "", fmt.Errorf("token not valid")
+	return "", fmt.Errorf("no token available")
 }
 
 func verifyToken(t string) (bool, error) {
